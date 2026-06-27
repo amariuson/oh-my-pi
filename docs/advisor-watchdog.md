@@ -201,6 +201,47 @@ Especially pay attention to:
 
 Later project files sit closer to the end of the advisor prompt, so narrower directory guidance is more prominent than broad ancestor guidance.
 
+## Dynamic advisors and ADVISORS.md
+
+Dynamic advisors are one-shot reviewers spawned by the main agent through `spawn_advisor`. They return structured advice as the tool result; they do not steer, edit, approve, or interrupt directly.
+
+The tool is available only when:
+
+- `advisor.enabled: true`
+- `advisor.dynamic.enabled: true`
+- the session has a dynamic advisor runtime (main sessions and task subagents; one-shot dynamic advisors themselves receive no tools and cannot recurse)
+
+Advisor rosters are declarative. They define reusable roles and prompts plus bounded pool metadata:
+
+```markdown
+# Advisors
+
+## correctness
+Model: slow
+When: complex logic, exported APIs, parsers, state machines
+Mode: always
+Instances: 0-1
+Prompt:
+Find correctness bugs, missed edge cases, wrong assumptions, and unsafe migrations.
+
+## tests
+Model: smol
+When: tests are added or changed
+Mode: triggered
+Instances: 0-1
+Prompt:
+Review whether tests cover externally observable behavior and avoid brittle implementation assertions.
+```
+
+`Mode: always` without `Instances:` starts one persistent advisor for that profile. `Instances: min-max` starts `min` persistent advisors and treats `max` as a routing cap hint; it does not automatically fan out to the maximum. The session-wide `advisor.pool.maxInstances` setting (default `5`) caps the total persistent profile advisors a project roster can start. `0-1` remains on-demand only; `3-5` starts three, subject to the cap.
+
+Discovery:
+
+1. user level: `<active agent dir>/ADVISORS.md` or `ADVISOR.md`
+2. project levels, ancestor-to-leaf: `<dir>/.omp/ADVISORS.md` or `ADVISOR.md`
+
+Project rosters load only when `advisor.dynamic.useProjectAdvisors` is true. A project file cannot force expensive models: profile `Model:` is only a hint and must match `advisor.dynamic.allowedModels`; otherwise the dynamic advisor falls back to `advisor.dynamic.defaultModel`.
+
 ## Subagents
 
 `advisor.subagents` controls whether spawned task/eval subagents also get an advisor runtime.
@@ -226,15 +267,17 @@ The advisor's live context is in-memory and append-only; it is retained while th
 
 The advisor is a passive reviewer with its own model usage, so — like a task subagent — every finalized advisor turn is appended to a JSONL inside the owning session's artifacts dir:
 
-- main session: `<session>/__advisor.jsonl`
-- subagent advisor (`advisor.subagents: true`): `<session>/<SubId>/__advisor.jsonl`
+- main session default advisor: `<session>/__advisor.jsonl`
+- pooled profile advisor: `<session>/__advisor-<profile>-<n>.jsonl`
+- subagent default advisor (`advisor.subagents: true`): `<session>/<SubId>/__advisor.jsonl`
+- subagent pooled profile advisor: `<session>/<SubId>/__advisor-<profile>-<n>.jsonl`
 
-The path is derived from the session file (not the artifacts dir, which subagents share with their parent), so each advisor writes a distinct file. The reserved `__advisor` stem cannot collide with a task subagent's `<id>.jsonl` (task id allocation reserves it).
+The path is derived from the session file (not the artifacts dir, which subagents share with their parent), so each advisor writes a distinct file. Task output allocation reserves both the exact `__advisor` stem and the `__advisor-` prefix so subagent ids cannot collide with advisor transcript JSONL files.
 
 Why a file:
 
 - **Usage attribution.** `omp stats` scans each session folder recursively, so advisor assistant turns (with their usage/cost) are attributed to the same project/session like any other subagent. Advisor "session update" prompts are persisted as `synthetic`, agent-attributed user messages so they never inflate user-message metrics.
-- **Observability.** The Agent Hub discovers `__advisor.jsonl` on open and shows it as a read-only `advisor`-kind transcript under its owning session.
+- **Observability.** The Agent Hub discovers `__advisor.jsonl` and `__advisor-*.jsonl` on open and shows them as read-only `advisor`-kind transcripts under their owning session.
 
 The file follows session switches: on `/new`, resume/switch, and branch the recorder reopens at the new session's path on the next advisor turn; before a `/drop` deletes the old artifacts dir the recorder feed is detached and drained so a queued write cannot recreate the deleted file. The on-disk log is append-only and independent of the in-memory context — re-primes and compaction never truncate it.
 

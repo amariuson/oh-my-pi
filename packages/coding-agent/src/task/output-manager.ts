@@ -13,6 +13,10 @@
 import * as fs from "node:fs/promises";
 import { ADVISOR_TRANSCRIPT_STEM } from "../advisor/transcript-recorder";
 
+function isReservedAdvisorOutputId(id: string): boolean {
+	return id === ADVISOR_TRANSCRIPT_STEM || id.startsWith(`${ADVISOR_TRANSCRIPT_STEM}-`);
+}
+
 /**
  * Manages agent output ID allocation to ensure uniqueness.
  *
@@ -72,9 +76,10 @@ export class AgentOutputManager {
 
 	/** Pick the first free name (base, then `base-2`, `base-3`, …) and reserve it. */
 	#allocateUnique(id: string): string {
-		let candidate = id;
-		for (let n = 2; this.#taken.has(candidate); n++) {
-			candidate = `${id}-${n}`;
+		const base = isReservedAdvisorOutputId(id) ? `agent-${id}` : id;
+		let candidate = base;
+		for (let n = 2; this.#taken.has(candidate) || isReservedAdvisorOutputId(candidate); n++) {
+			candidate = `${base}-${n}`;
 		}
 		this.#taken.add(candidate);
 		return this.#parentPrefix ? `${this.#parentPrefix}.${candidate}` : candidate;

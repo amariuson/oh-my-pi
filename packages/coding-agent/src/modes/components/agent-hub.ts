@@ -18,7 +18,7 @@ import * as path from "node:path";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import { Container, Ellipsis, matchesKey, type OverlayHandle, type TUI } from "@oh-my-pi/pi-tui";
 import { formatAge, getProjectDir, logger } from "@oh-my-pi/pi-utils";
-import { ADVISOR_TRANSCRIPT_FILENAME } from "../../advisor";
+import { ADVISOR_TRANSCRIPT_FILENAME, ADVISOR_TRANSCRIPT_STEM } from "../../advisor";
 import type { KeyId } from "../../config/keybindings";
 import type { MessageRenderer } from "../../extensibility/extensions/types";
 import { IrcBus } from "../../irc/bus";
@@ -87,9 +87,16 @@ function registerPersistedSubagentsFromDir(registry: AgentRegistry, dir: string,
 		// The advisor transcript is observability-only: register it as a non-peer
 		// `advisor` kind under its owning session so the Hub can show its read-only
 		// transcript, but it never joins agent-facing rosters and is not revivable.
-		if (entry.name === ADVISOR_TRANSCRIPT_FILENAME) {
+		if (
+			entry.name === ADVISOR_TRANSCRIPT_FILENAME ||
+			(entry.name.startsWith(`${ADVISOR_TRANSCRIPT_STEM}-`) && entry.name.endsWith(".jsonl"))
+		) {
 			const owner = parentId ?? MAIN_AGENT_ID;
-			const advisorId = `${owner}/advisor`;
+			const suffix =
+				entry.name === ADVISOR_TRANSCRIPT_FILENAME
+					? "advisor"
+					: `advisor:${entry.name.slice(ADVISOR_TRANSCRIPT_STEM.length + 1, -".jsonl".length)}`;
+			const advisorId = `${owner}/${suffix}`;
 			const existing = registry.get(advisorId);
 			// Never clobber a non-advisor ref that happens to share this id (a freak
 			// user task literally named `<owner>/advisor`): leave it, skip the advisor.
@@ -99,7 +106,7 @@ function registerPersistedSubagentsFromDir(registry: AgentRegistry, dir: string,
 				if (existing) registry.unregister(advisorId);
 				registry.register({
 					id: advisorId,
-					displayName: "advisor",
+					displayName: suffix,
 					kind: "advisor",
 					parentId: owner,
 					session: null,

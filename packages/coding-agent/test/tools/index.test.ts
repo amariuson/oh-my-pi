@@ -184,6 +184,55 @@ describe("createTools", () => {
 		expect(names).toEqual(["report_finding", "resolve"]);
 	});
 
+	it("exposes spawn_advisor only when a dynamic advisor runtime is available", async () => {
+		const settings = createSettingsWithOverrides({
+			"advisor.enabled": true,
+			"advisor.dynamic.enabled": true,
+		});
+
+		const unavailable = await createTools(createTestSession({ settings }), ["spawn_advisor"]);
+		expect(unavailable.map(t => t.name)).toEqual(["resolve"]);
+
+		let spawnCalled = false;
+		const available = await createTools(
+			createTestSession({
+				settings,
+				runDynamicAdvisor: async () => {
+					spawnCalled = true;
+					return {
+						advisorId: "correctness",
+						role: "Correctness",
+						model: "test/model",
+						notes: [],
+					};
+				},
+			}),
+			["spawn_advisor"],
+		);
+		expect(available.map(t => t.name)).toEqual(["spawn_advisor", "resolve"]);
+		const subagentTools = await createTools(
+			createTestSession({
+				settings,
+				taskDepth: 1,
+				runDynamicAdvisor: async () => ({
+					advisorId: "tests",
+					role: "Tests",
+					model: "test/model",
+					notes: [],
+				}),
+			}),
+			["spawn_advisor"],
+		);
+		expect(subagentTools.map(t => t.name)).toEqual(["spawn_advisor", "resolve"]);
+
+		const spawnTool = available.find(tool => tool.name === "spawn_advisor");
+		if (!spawnTool) throw new Error("Missing spawn_advisor tool");
+		await expect(spawnTool.execute("call-1", { role: "Correctness", focus: "   " })).rejects.toThrow(
+			"spawn_advisor requires a non-empty `focus`.",
+		);
+		expect(spawnCalled).toBe(false);
+	});
+
 	it("includes yield tool when required", async () => {
 		const session = createTestSession({ requireYieldTool: true });
 		const tools = await createTools(session);

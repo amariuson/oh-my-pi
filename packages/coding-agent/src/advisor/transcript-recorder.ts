@@ -50,6 +50,7 @@ export class AdvisorTranscriptRecorder {
 		private readonly resolveSessionFile: () => string | undefined,
 		private readonly resolveCwd: () => string,
 		after?: Promise<unknown>,
+		private readonly transcriptFileName = ADVISOR_TRANSCRIPT_FILENAME,
 	) {
 		this.#queue = after
 			? after.then(
@@ -83,7 +84,7 @@ export class AdvisorTranscriptRecorder {
 		}
 		const sessionFile = this.resolveSessionFile();
 		if (!sessionFile?.endsWith(JSONL_SUFFIX)) return;
-		const file = path.join(sessionFile.slice(0, -JSONL_SUFFIX.length), ADVISOR_TRANSCRIPT_FILENAME);
+		const file = path.join(sessionFile.slice(0, -JSONL_SUFFIX.length), this.transcriptFileName);
 		const cwd = this.resolveCwd();
 		this.#enqueue(async () => {
 			if (file !== this.#file) {

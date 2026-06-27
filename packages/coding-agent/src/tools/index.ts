@@ -62,6 +62,7 @@ import { createReportToolIssueTool, isAutoQaEnabled } from "./report-tool-issue"
 import { ResolveTool } from "./resolve";
 import { reportFindingTool } from "./review";
 import { SearchToolBm25Tool } from "./search-tool-bm25";
+import { type DynamicAdvisorResult, type SpawnAdvisorParams, SpawnAdvisorTool } from "./spawn-advisor";
 import { loadSshTool } from "./ssh";
 import { type TodoPhase, TodoTool } from "./todo";
 import { WriteTool } from "./write";
@@ -100,6 +101,7 @@ export * from "./report-tool-issue";
 export * from "./resolve";
 export * from "./review";
 export * from "./search-tool-bm25";
+export * from "./spawn-advisor";
 export * from "./ssh";
 export * from "./todo";
 export * from "./tts";
@@ -372,6 +374,8 @@ export interface ToolSession {
 	getTelemetry?: () => AgentTelemetryConfig | undefined;
 	/** Return image attachments visible to tools for resolving labels such as `Image #1`. */
 	getImageAttachments?: () => ImageAttachmentEntry[];
+	/** Run a one-shot dynamic advisor from the primary session runtime. */
+	runDynamicAdvisor?: (request: SpawnAdvisorParams, signal?: AbortSignal) => Promise<DynamicAdvisorResult>;
 }
 
 export type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool | null>;
@@ -462,6 +466,7 @@ export const BUILTIN_TOOLS: Record<BuiltinToolName, ToolFactory> = {
 	todo: s => new TodoTool(s),
 	web_search: s => new WebSearchTool(s),
 	search_tool_bm25: SearchToolBm25Tool.createIf,
+	spawn_advisor: SpawnAdvisorTool.createIf,
 	write: s => new WriteTool(s),
 	memory_edit: MemoryEditTool.createIf,
 	retain: MemoryRetainTool.createIf,
@@ -610,6 +615,13 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 		if (name === "web_search") return session.settings.get("web_search.enabled");
 		// search_tool_bm25 is allowed when either legacy mcp.discoveryMode or new tools.discoveryMode is active.
 		if (name === "search_tool_bm25") return discoveryActive;
+		if (name === "spawn_advisor") {
+			return (
+				!!session.runDynamicAdvisor &&
+				session.settings.get("advisor.enabled") &&
+				session.settings.get("advisor.dynamic.enabled")
+			);
+		}
 		if (name === "browser") return session.settings.get("browser.enabled");
 		if (name === "checkpoint" || name === "rewind") return session.settings.get("checkpoint.enabled");
 		if (name === "irc") return isIrcEnabled(session.settings, session.taskDepth ?? 0);

@@ -133,6 +133,25 @@ describe("runSubprocess parent-discovery pass-through (issue #2190)", () => {
 		expect(forwarded?.preloadedCustomToolPaths).toBeUndefined();
 	});
 
+	it("auto-includes spawn_advisor for subagents with explicit tool lists when dynamic advisors are enabled", async () => {
+		const session = yieldEmittingSession();
+		const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));
+		const settings = Settings.isolated({
+			"advisor.enabled": true,
+			"advisor.dynamic.enabled": true,
+		});
+
+		const result = await runSubprocess({
+			...baseOptions,
+			settings,
+			agent: { ...baseAgent, tools: ["read"] },
+		});
+
+		expect(result.exitCode).toBe(0);
+		const forwarded = spy.mock.calls[0]?.[0];
+		expect(forwarded?.toolNames).toEqual(["read", "irc", "spawn_advisor"]);
+	});
+
 	it("records the spawning agent as parentAgentId, distinct from the child's own id and prefix", async () => {
 		const session = yieldEmittingSession();
 		const spy = vi.spyOn(sdkModule, "createAgentSession").mockResolvedValue(createSessionResult(session));

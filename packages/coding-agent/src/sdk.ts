@@ -20,9 +20,11 @@ import { $env, $flag, getAgentDir, getProjectDir, logger, postmortem, prompt, Sn
 import { INTENT_FIELD } from "@oh-my-pi/pi-wire";
 import {
 	ADVISOR_READONLY_TOOL_NAMES,
+	discoverAdvisorProfiles,
 	discoverWatchdogFiles,
 	formatActiveRepoWatchdogPrompt,
 	formatAdvisorContextPrompt,
+	formatAdvisorProfilesForPrompt,
 } from "./advisor";
 import { type AsyncJob, AsyncJobManager } from "./async";
 import { AutoLearnController, buildAutoLearnInstructions } from "./autolearn/controller";
@@ -1158,6 +1160,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	activeRepoContextPromise.catch(() => {});
 	const watchdogFilesPromise = logger.time("discoverWatchdogFiles", () => discoverWatchdogFiles(cwd, agentDir));
 	watchdogFilesPromise.catch(() => {});
+	const advisorProfilesPromise = logger.time("discoverAdvisorProfiles", () =>
+		discoverAdvisorProfiles(cwd, agentDir, { includeProject: settings.get("advisor.dynamic.useProjectAdvisors") }),
+	);
+	advisorProfilesPromise.catch(() => {});
 	const promptTemplatesPromise = options.promptTemplates
 		? Promise.resolve(options.promptTemplates)
 		: logger.time("discoverPromptTemplates", discoverPromptTemplates, cwd, agentDir);
@@ -1403,11 +1409,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		}
 		return result;
 	};
-	const [contextFiles, resolvedWorkspaceTree, watchdogFiles, activeRepoContext] = await Promise.all([
+	const [contextFiles, resolvedWorkspaceTree, watchdogFiles, activeRepoContext, advisorProfiles] = await Promise.all([
 		contextFilesPromise,
 		raceWithDeadline("buildWorkspaceTree", workspaceTreePromise),
 		watchdogFilesPromise,
 		activeRepoContextPromise,
+		advisorProfilesPromise,
 	]);
 
 	let agent: Agent;
@@ -1594,6 +1601,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			authStorage,
 			modelRegistry,
 			getTelemetry: () => agent?.telemetry,
+			runDynamicAdvisor: (request, signal) => session.runDynamicAdvisor(request, signal),
 			// Subagents inherit the singleton (the parent's manager) so their bash/task
 			// completions still flow into the spawning conversation's yieldQueue.
 			// Secondary in-process top-level sessions (no parentTaskPrefix, no
@@ -2229,6 +2237,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const appendParts: string[] = [];
 			if (memoryInstructions) appendParts.push(memoryInstructions);
 			if (autoLearnInstructions) appendParts.push(autoLearnInstructions);
+			const advisorRosterInstructions =
+				toolNames.includes("spawn_advisor") &&
+				settings.get("advisor.enabled") &&
+				settings.get("advisor.dynamic.enabled")
+					? formatAdvisorProfilesForPrompt(advisorProfiles ?? [])
+					: undefined;
+			if (advisorRosterInstructions) appendParts.push(advisorRosterInstructions);
 			let appendPrompt: string | undefined = appendParts.length > 0 ? appendParts.join("\n\n") : undefined;
 			if (serverInstructions && serverInstructions.size > 0) {
 				const parts: string[] = [];
@@ -2677,6 +2692,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		session = new AgentSession({
 			advisorWatchdogPrompt,
 			advisorContextPrompt,
+			advisorProfiles,
 			agent,
 			pruneToolDescriptions: inlineToolDescriptors,
 			thinkingLevel: autoThinking ? AUTO_THINKING : effectiveThinkingLevel,

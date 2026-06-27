@@ -22,6 +22,7 @@ export const BUILTIN_TOOL_NAMES = [
 	"todo",
 	"web_search",
 	"search_tool_bm25",
+	"spawn_advisor",
 	"write",
 	"memory_edit",
 	"retain",

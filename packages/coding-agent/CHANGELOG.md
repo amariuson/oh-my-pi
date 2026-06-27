@@ -13,6 +13,21 @@
 
 - Simplified the status line subagent display by removing running state and hub hint indicators.
 - Updated online title, memory, and classification tasks to prioritize the new `tiny` model role.
+- Added Loop Guard "Tool-Call Reminder" to automatically interrupt Gemini reasoning loops that generate excessive planning headers without acting
+- Added support for file deletion and moving within file editing operations
+- Added declarative `ADVISORS.md` rosters and a gated `spawn_advisor` tool for one-shot dynamic reviewers
+
+### Changed
+
+- Renamed `search` tool to `grep`
+- Renamed `find` tool to `glob`
+- Updated configuration keys and UI labels to reflect `grep` and `glob` tool naming
+- Automatically migrated existing user settings for `search` and `find` to `grep` and `glob` configs
+- Changed the `inlineToolDescriptors` setting ("Inline Tool Descriptors") from a boolean to a three-way enum (`auto` | `on` | `off`), defaulting to `auto`. `auto` inlines tool descriptors into the system prompt (and strips them from provider tool schemas) only for Gemini models, leaving them in the schemas otherwise; `on`/`off` force the behavior regardless of model. Existing `true`/`false` configs migrate to `on`/`off`.
+- Replaced `as string | undefined` inline casts with `typeof` guards in the TUI usage renderer's account identity resolution (`formatAccountLabel`, `formatUnlimitedReportLabel`, reset-credits label, and unlimited-plan tier), so empty-string metadata values fall through to the next fallback instead of being displayed
+- Allowed task subagents to use `spawn_advisor`, with `ADVISORS.md` roster guidance now shown to any session that has the tool.
+- Added bounded persistent advisor pools for `ADVISORS.md` profiles via `Mode:` / `Instances:` metadata and the `advisor.pool.maxInstances` cap.
+- Show the live persistent advisor count in the status-line model segment instead of the generic `++` advisor badge.
 
 ### Fixed
 
@@ -89,6 +104,7 @@
 - Improved the persistent Todo HUD styling and progress indicators to make it self-describing and visually distinct.
 - Fixed browser screenshots reporting `0x0` dimensions when image headers expose real dimensions.
 - Fixed `snapcompact` compaction silently falling back to LLM summaries when local preflight rejects the archive.
+- Fixed persistent advisor profile rendering when a profile defines `When:` metadata; the `when` field now renders as data instead of invoking the Handlebars `when` helper during startup.
 - Fixed `snapcompact` compaction silently falling back to an LLM summary when local preflight rejects the archive; manual and auto snapcompact now fail locally with the blocker instead of making provider calls. ([#3599](https://github.com/can1357/oh-my-pi/issues/3599))
 - Fixed garbled casing in auto-generated session titles. `normalizeGeneratedTitle` (`packages/coding-agent/src/tiny/text.ts`) used to force Title Case via a `\b\p{Ll}` regex, capitalizing function words ("for" → "For") and amplifying stray model capitals ("dAemon" → "DAemon"). It now reconciles each title token against the user's own message: tokens typed verbatim are kept; proper nouns the user cased distinctively are restored when the model flattened them ("tinyvmm" → "TinyVMM"); lowercase words carrying a stray interior capital the user never wrote are flattened ("dAemon" → "daemon"); and model-cased PascalCase proper nouns ("GitHub", "OAuth") are left untouched. Restoration is limited to distinctively cased source tokens so a message that merely starts with "For" can't force a mid-title "for" to "For". Applies to both the local tiny-model and online pi/smol title paths.
 - Fixed IRC broadcasts (`to: "all"`) rendering twice in the main agent's transcript. A subagent broadcast fans out one `bus.send` per live peer, and `listVisibleTo` always includes `Main`, so the main agent received the body once as its own `irc:incoming` card *and* once per other recipient as an `irc:relay` observation of the sibling legs (`Sender → Other`) — identical text shown N+1 times. `IrcTool.#executeSend` now sets `suppressRelay` on every broadcast leg when `Main` is among the targets (it already has the body via its direct incoming card), and `IrcBus.send` skips `#relayToMainUi` for suppressed legs. Direct sub→sub relays, direct messages to `Main`, and `Main`'s own outbound sends are unaffected.

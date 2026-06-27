@@ -87,8 +87,8 @@ const modelSegment: StatusLineSegment = {
 		}
 
 		// Fast-mode icon and thinking-level suffix trail the model name and are
-		// colored together with it as `statusLineModel`. The advisor "++" badge
-		// sits between the name and that tail in `accent`, so it reads as a
+		// colored together with it as `statusLineModel`. The advisor count sits
+		// between the name and that tail in `success`, so it reads as a
 		// distinct marker. theme.fg resets only the fg, so the spans are
 		// concatenated (not nested) to keep each color intact.
 		let tail = "";
@@ -117,8 +117,9 @@ const modelSegment: StatusLineSegment = {
 		// `statusLineModel` is aliased to `accent` in many themes, so the badge
 		// uses `success` to stay visibly distinct from the model name color.
 		let content = theme.fg("statusLineModel", withIcon(theme.icon.model, modelName));
-		if (ctx.session.isAdvisorActive()) {
-			content += theme.fg("success", "++");
+		const advisorCount = ctx.session.getAdvisorActiveCount();
+		if (advisorCount > 0) {
+			content += theme.fg("success", ` ${advisorCount}`);
 		}
 		if (tail) {
 			content += theme.fg("statusLineModel", tail);

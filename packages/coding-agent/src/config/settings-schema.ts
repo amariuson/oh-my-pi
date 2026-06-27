@@ -394,6 +394,90 @@ export const SETTINGS_SCHEMA = {
 				"Pair a second model (assigned to the 'advisor' role) that passively reviews each turn and injects notes.",
 		},
 	},
+	"advisor.dynamic.enabled": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "model",
+			group: "Advisor",
+			label: "Dynamic Advisors",
+			description: "Expose spawn_advisor so the agent can ask focused one-shot reviewers for advice.",
+			condition: "advisorEnabled",
+		},
+	},
+	"advisor.dynamic.defaultModel": {
+		type: "string",
+		default: "pi/smol",
+		ui: {
+			tab: "model",
+			group: "Advisor",
+			label: "Dynamic Advisor Default Model",
+			description: "Model role/spec used when a dynamic advisor request does not choose an allowed model.",
+			condition: "advisorEnabled",
+		},
+	},
+	"advisor.dynamic.allowedModels": {
+		type: "array",
+		default: ["pi/smol", "pi/advisor", "pi/slow"] as string[],
+		ui: {
+			tab: "model",
+			group: "Advisor",
+			label: "Dynamic Advisor Allowed Models",
+			description: "Model role/spec allowlist for dynamic advisors. Project ADVISORS.md files cannot bypass it.",
+			condition: "advisorEnabled",
+		},
+	},
+	"advisor.dynamic.maxPerTurn": {
+		type: "number",
+		default: 3,
+		ui: {
+			tab: "model",
+			group: "Advisor",
+			label: "Dynamic Advisors Per Turn",
+			description: "Maximum one-shot advisors the agent may spawn in one turn.",
+			condition: "advisorEnabled",
+		},
+	},
+	"advisor.dynamic.maxPerSession": {
+		type: "number",
+		default: 20,
+		ui: {
+			tab: "model",
+			group: "Advisor",
+			label: "Dynamic Advisors Per Session",
+			description: "Maximum one-shot advisors the agent may spawn in one session.",
+			condition: "advisorEnabled",
+		},
+	},
+	"advisor.dynamic.useProjectAdvisors": {
+		type: "boolean",
+		default: true,
+		ui: {
+			tab: "model",
+			group: "Advisor",
+			label: "Use Project ADVISORS.md",
+			description: "Load declarative advisor profiles from project .omp/ADVISORS.md files.",
+			condition: "advisorEnabled",
+		},
+	},
+	"advisor.pool.maxInstances": {
+		type: "number",
+		default: 5,
+		ui: {
+			tab: "model",
+			group: "Advisor",
+			label: "Advisor Pool Max Instances",
+			description: "Maximum persistent ADVISORS.md profile advisors this session may start.",
+			options: [
+				{ label: "Off", value: "0" },
+				{ label: "1", value: "1" },
+				{ label: "2", value: "2" },
+				{ label: "3", value: "3" },
+				{ label: "5", value: "5" },
+			],
+			condition: "advisorEnabled",
+		},
+	},
 	"advisor.subagents": {
 		type: "boolean",
 		default: false,
@@ -3322,7 +3406,7 @@ export const SETTINGS_SCHEMA = {
 		default: 1,
 		ui: {
 			tab: "tools",
-			group: "Grep & Browser",
+			group: "Search & Browser",
 			label: "Grep Context Before",
 			description: "Lines of context before each grep match",
 			options: [
@@ -3340,7 +3424,7 @@ export const SETTINGS_SCHEMA = {
 		default: 3,
 		ui: {
 			tab: "tools",
-			group: "Grep & Browser",
+			group: "Search & Browser",
 			label: "Grep Context After",
 			description: "Lines of context after each grep match",
 			options: [

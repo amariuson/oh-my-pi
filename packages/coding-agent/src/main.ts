@@ -138,6 +138,7 @@ const HOST_DEFAULTED_SETTING_PATHS: SettingPath[] = [
 	// they do opt in they get the default tuning rather than the user's local tuning.
 	"advisor.enabled",
 	"advisor.subagents",
+	"advisor.pool.maxInstances",
 	"advisor.syncBacklog",
 	"advisor.immuneTurns",
 	"serviceTierAdvisor",

@@ -1931,6 +1931,14 @@ export async function runSubprocess(options: ExecutorOptions): Promise<SingleRes
 	if (toolNames && !toolNames.includes("irc")) {
 		toolNames = [...toolNames, "irc"];
 	}
+	if (
+		toolNames &&
+		!toolNames.includes("spawn_advisor") &&
+		subagentSettings.get("advisor.enabled") &&
+		subagentSettings.get("advisor.dynamic.enabled")
+	) {
+		toolNames = [...toolNames, "spawn_advisor"];
+	}
 	if (toolNames?.includes("exec")) {
 		const backends = resolveEvalBackends({ settings } as ToolSession);
 		const expanded = toolNames.filter(name => name !== "exec");

@@ -141,6 +141,23 @@ describe("AdvisorTranscriptRecorder", () => {
 		});
 	});
 
+	it("supports distinct transcript filenames for pooled advisors", async () => {
+		await withTempDir(async dir => {
+			const sessionFile = path.join(dir, "sess.jsonl");
+			const recorder = new AdvisorTranscriptRecorder(
+				() => sessionFile,
+				() => dir,
+				undefined,
+				"__advisor-correctness-1.jsonl",
+			);
+			recorder.record(assistantMessage("pooled", 7));
+			await recorder.close();
+
+			const messages = await readMessageEntries(path.join(dir, "sess", "__advisor-correctness-1.jsonl"));
+			expect(messages[0].message?.usage?.input).toBe(7);
+		});
+	});
+
 	it("routes later turns to the new session file after a switch", async () => {
 		await withTempDir(async dir => {
 			let sessionFile = path.join(dir, "first.jsonl");

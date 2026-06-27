@@ -1,7 +1,9 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import * as path from "node:path";
 import { Agent } from "@oh-my-pi/pi-agent-core";
-import type { Model } from "@oh-my-pi/pi-ai";
+import type { Api, Model } from "@oh-my-pi/pi-ai";
+import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
+import { AssistantMessageEventStream } from "@oh-my-pi/pi-ai/utils/event-stream";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -9,6 +11,7 @@ import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
 import { SessionManager } from "@oh-my-pi/pi-coding-agent/session/session-manager";
 import { TempDir } from "@oh-my-pi/pi-utils";
+import { createAssistantMessage } from "./helpers/agent-session-setup";
 
 describe("AgentSession advisor toggle", () => {
 	let sharedDir: TempDir;
@@ -121,6 +124,156 @@ describe("AgentSession advisor toggle", () => {
 		expect(session.formatAdvisorStatus()).toBe(
 			"Advisor setting is enabled, but no model is assigned to the 'advisor' role.",
 		);
+	});
+
+	it("starts persistent profile advisors from ADVISORS metadata without the singleton advisor role", async () => {
+		const poolSettings = Settings.isolated({
+			"advisor.enabled": true,
+			"advisor.dynamic.enabled": true,
+			"advisor.dynamic.allowedModels": ["*"],
+			"advisor.pool.maxInstances": 2,
+			"compaction.enabled": false,
+		});
+		const poolDir = TempDir.createSync("@pi-advisor-pool-");
+		const poolSessionManager = SessionManager.create(poolDir.path(), poolDir.path());
+		const poolAgent = new Agent({
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+		});
+		const poolSession = new AgentSession({
+			agent: poolAgent,
+			sessionManager: poolSessionManager,
+			settings: poolSettings,
+			modelRegistry,
+			advisorReadOnlyTools: [],
+			advisorProfiles: [
+				{
+					id: "correctness",
+					label: "Correctness",
+					model: "anthropic/claude-sonnet-4-5",
+					mode: "triggered",
+					instances: { min: 3, max: 5 },
+					prompt: "Find correctness bugs.",
+					sourcePath: "ADVISORS.md",
+					level: "project",
+				},
+			],
+		});
+		try {
+			expect(poolSession.isAdvisorActive()).toBe(true);
+			expect(poolSession.formatAdvisorStatus()).toContain("Advisor is enabled");
+			const dump = poolSession.formatAdvisorHistoryAsText();
+			expect(dump).toContain("# Advisor correctness-1");
+			expect(dump).toContain("# Advisor correctness-2");
+			expect(dump).not.toContain("# Advisor correctness-3");
+		} finally {
+			await poolSession.dispose();
+			await poolDir.remove();
+		}
+	});
+
+	it("rekeys persistent profile advisor API resolution after a new session", async () => {
+		const poolSettings = Settings.isolated({
+			"advisor.enabled": true,
+			"advisor.dynamic.enabled": true,
+			"advisor.dynamic.allowedModels": ["*"],
+			"advisor.pool.maxInstances": 1,
+			"advisor.syncBacklog": "1",
+			"compaction.enabled": false,
+			"retry.enabled": false,
+		});
+		const poolDir = TempDir.createSync("@pi-advisor-pool-session-id-");
+		const poolSessionManager = SessionManager.create(poolDir.path(), poolDir.path());
+		const primaryModel = createMockModel({
+			responses: [{ content: ["first"] }, { content: ["second"] }],
+		});
+		const poolAgent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: {
+				model,
+				systemPrompt: ["Test"],
+				tools: [],
+				messages: [],
+			},
+			streamFn: primaryModel.stream,
+		});
+		const advisorRequestSessionIds: string[] = [];
+		const poolModelRegistry = new ModelRegistry(authStorage);
+		const advisorApi = "test-advisor-rekey" as Api;
+		const advisorSourceId = "advisor-toggle-rekey-test";
+		poolModelRegistry.registerProvider(
+			"advisor-rekey",
+			{
+				api: advisorApi,
+				apiKey: "test-key",
+				baseUrl: "https://advisor-rekey.invalid",
+				models: [
+					{
+						id: "reviewer",
+						name: "Reviewer",
+						api: advisorApi,
+						reasoning: false,
+						input: ["text"],
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+						contextWindow: 200_000,
+						maxTokens: 32_768,
+					},
+				],
+				streamSimple: (_requestModel, _context, options) => {
+					advisorRequestSessionIds.push(options?.sessionId ?? "");
+					const stream = new AssistantMessageEventStream();
+					queueMicrotask(() => {
+						const text = JSON.stringify({ notes: [] });
+						const message = createAssistantMessage(text);
+						stream.push({ type: "text_delta", contentIndex: 0, delta: text, partial: message });
+						stream.push({ type: "done", reason: "stop", message });
+					});
+					return stream;
+				},
+			},
+			advisorSourceId,
+		);
+		const poolSession = new AgentSession({
+			agent: poolAgent,
+			sessionManager: poolSessionManager,
+			settings: poolSettings,
+			modelRegistry: poolModelRegistry,
+			advisorReadOnlyTools: [],
+			advisorProfiles: [
+				{
+					id: "correctness",
+					label: "Correctness",
+					model: "advisor-rekey/reviewer",
+					mode: "always",
+					prompt: "Find correctness bugs.",
+					sourcePath: "ADVISORS.md",
+					level: "project",
+				},
+			],
+		});
+		try {
+			const firstSessionId = poolSession.sessionId;
+			await poolSession.prompt("first");
+			await poolSession.waitForIdle();
+			expect(advisorRequestSessionIds).toContain(`${firstSessionId}-advisor-correctness-1`);
+
+			advisorRequestSessionIds.length = 0;
+			await poolSession.newSession();
+			const secondSessionId = poolSession.sessionId;
+			expect(secondSessionId).not.toBe(firstSessionId);
+			await poolSession.prompt("second");
+			await poolSession.waitForIdle();
+			expect(advisorRequestSessionIds).toContain(`${secondSessionId}-advisor-correctness-1`);
+			expect(advisorRequestSessionIds).not.toContain(`${firstSessionId}-advisor-correctness-1`);
+		} finally {
+			poolModelRegistry.clearSourceRegistrations(advisorSourceId);
+			await poolSession.dispose();
+			await poolDir.remove();
+		}
 	});
 
 	it("keeps sessions isolated when sharing a Settings instance", async () => {

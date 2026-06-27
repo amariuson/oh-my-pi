@@ -264,6 +264,7 @@ describe("ACP lazy startup", () => {
 			"memories.enabled": true,
 			"advisor.enabled": true,
 			"advisor.subagents": true,
+			"advisor.pool.maxInstances": 9,
 			"advisor.syncBacklog": "5",
 			"advisor.immuneTurns": 7,
 		} as const;
