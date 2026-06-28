@@ -19,9 +19,7 @@
 - Updated online title, memory, and classification tasks to prioritize the new `tiny` model role.
 - Added Loop Guard "Tool-Call Reminder" to automatically interrupt Gemini reasoning loops that generate excessive planning headers without acting
 - Added support for file deletion and moving within file editing operations
-- Added declarative `ADVISORS.md` rosters and a gated `spawn_advisor` tool for one-shot dynamic reviewers
 - Added declarative `ADVISORS.yaml` rosters and a gated `spawn_advisor` tool for dynamic reviewers
-- Added the `craftz` magic keyword for careful, spec-first maintainability workflows, plus `docs/yagni-ignore.md` for documented YAGNI exceptions.
 
 ### Changed
 

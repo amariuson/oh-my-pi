@@ -836,6 +836,7 @@ import * as bundledPiCodingAgentToolsReportToolIssue from "@oh-my-pi/pi-coding-a
 import * as bundledPiCodingAgentToolsResolve from "@oh-my-pi/pi-coding-agent/tools/resolve";
 import * as bundledPiCodingAgentToolsReview from "@oh-my-pi/pi-coding-agent/tools/review";
 import * as bundledPiCodingAgentToolsSearchToolBm25 from "@oh-my-pi/pi-coding-agent/tools/search-tool-bm25";
+import * as bundledPiCodingAgentToolsSpawnAdvisor from "@oh-my-pi/pi-coding-agent/tools/spawn-advisor";
 import * as bundledPiCodingAgentToolsSqliteReader from "@oh-my-pi/pi-coding-agent/tools/sqlite-reader";
 import * as bundledPiCodingAgentToolsSsh from "@oh-my-pi/pi-coding-agent/tools/ssh";
 import * as bundledPiCodingAgentToolsTodo from "@oh-my-pi/pi-coding-agent/tools/todo";
@@ -2986,6 +2987,9 @@ export const BUNDLED_PI_REGISTRY: Readonly<Record<string, Readonly<Record<string
 		Record<string, unknown>
 	>,
 	"@oh-my-pi/pi-coding-agent/tools/search-tool-bm25": bundledPiCodingAgentToolsSearchToolBm25 as unknown as Readonly<
+		Record<string, unknown>
+	>,
+	"@oh-my-pi/pi-coding-agent/tools/spawn-advisor": bundledPiCodingAgentToolsSpawnAdvisor as unknown as Readonly<
 		Record<string, unknown>
 	>,
 	"@oh-my-pi/pi-coding-agent/tools/sqlite-reader": bundledPiCodingAgentToolsSqliteReader as unknown as Readonly<
