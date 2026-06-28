@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added sticky dynamic advisors with bounded leases, self-retirement, and YAML advisor profile files.
+
 ## [16.2.2] - 2026-06-27
 
 ### Added
@@ -16,6 +20,8 @@
 - Added Loop Guard "Tool-Call Reminder" to automatically interrupt Gemini reasoning loops that generate excessive planning headers without acting
 - Added support for file deletion and moving within file editing operations
 - Added declarative `ADVISORS.md` rosters and a gated `spawn_advisor` tool for one-shot dynamic reviewers
+- Added declarative `ADVISORS.yaml` rosters and a gated `spawn_advisor` tool for dynamic reviewers
+- Added the `craftz` magic keyword for careful, spec-first maintainability workflows, plus `docs/yagni-ignore.md` for documented YAGNI exceptions.
 
 ### Changed
 
@@ -25,8 +31,8 @@
 - Automatically migrated existing user settings for `search` and `find` to `grep` and `glob` configs
 - Changed the `inlineToolDescriptors` setting ("Inline Tool Descriptors") from a boolean to a three-way enum (`auto` | `on` | `off`), defaulting to `auto`. `auto` inlines tool descriptors into the system prompt (and strips them from provider tool schemas) only for Gemini models, leaving them in the schemas otherwise; `on`/`off` force the behavior regardless of model. Existing `true`/`false` configs migrate to `on`/`off`.
 - Replaced `as string | undefined` inline casts with `typeof` guards in the TUI usage renderer's account identity resolution (`formatAccountLabel`, `formatUnlimitedReportLabel`, reset-credits label, and unlimited-plan tier), so empty-string metadata values fall through to the next fallback instead of being displayed
-- Allowed task subagents to use `spawn_advisor`, with `ADVISORS.md` roster guidance now shown to any session that has the tool.
-- Added bounded persistent advisor pools for `ADVISORS.md` profiles via `Mode:` / `Instances:` metadata and the `advisor.pool.maxInstances` cap.
+- Allowed task subagents to use `spawn_advisor`, with `ADVISORS.yaml` roster guidance now shown to any session that has the tool.
+- Added bounded persistent advisor pools for `ADVISORS.yaml` profiles via `mode` / `instances.min` / `instances.max` metadata and the `advisor.pool.maxInstances` cap.
 - Show the live persistent advisor count in the status-line model segment instead of the generic `++` advisor badge.
 
 ### Fixed

@@ -9,7 +9,7 @@ import {
 	discoverAdvisorProfiles,
 	formatAdvisorProfilesForPrompt,
 	normalizeDynamicAdvisorModelSelector,
-	parseAdvisorProfilesMarkdown,
+	parseAdvisorProfilesYaml,
 } from "../profiles";
 
 let tempDirs: string[] = [];
@@ -24,45 +24,6 @@ async function tempDir(): Promise<string> {
 	tempDirs.push(dir);
 	return dir;
 }
-
-describe("parseAdvisorProfilesMarkdown", () => {
-	it("parses declarative advisor profiles", () => {
-		const profiles = parseAdvisorProfilesMarkdown(
-			[
-				"# Advisors",
-				"",
-				"## correctness",
-				"Description: Checks logic",
-				"Model: slow",
-				"When: complex logic",
-				"Mode: always",
-				"Instances: 1-2",
-				"Prompt:",
-				"Find missed edge cases.",
-				"",
-				"## Tests",
-				"Prompt: Review test behavior coverage.",
-			].join("\n"),
-			"ADVISORS.md",
-		);
-
-		expect(profiles).toHaveLength(2);
-		expect(profiles[0]).toMatchObject({
-			id: "correctness",
-			description: "Checks logic",
-			model: "slow",
-			when: "complex logic",
-			mode: "always",
-			instances: { min: 1, max: 2 },
-			prompt: "Find missed edge cases.",
-		});
-		expect(profiles[1]).toMatchObject({
-			id: "tests",
-			label: "Tests",
-			prompt: "Review test behavior coverage.",
-		});
-	});
-});
 
 describe("advisor profile prompt", () => {
 	it("renders trigger hints from profiles with a when field", () => {
@@ -80,20 +41,61 @@ describe("advisor profile prompt", () => {
 	});
 });
 
+describe("parseAdvisorProfilesYaml", () => {
+	it("parses yaml advisor profiles", () => {
+		const profiles = parseAdvisorProfilesYaml(
+			[
+				"advisors:",
+				"  correctness:",
+				"    label: Correctness",
+				"    description: Checks logic",
+				"    model: slow",
+				"    when: complex logic",
+				"    mode: always",
+				"    instances:",
+				"      min: 1",
+				"      max: 3",
+				"    prompt: Review behavior and edge cases.",
+				"  docs:",
+				"    instances:",
+				"      min: 0",
+				"      max: 2",
+				"    prompt: Keep docs accurate.",
+			].join("\n"),
+			"ADVISORS.yaml",
+			"project",
+		);
+
+		expect(profiles.map(profile => profile.id)).toEqual(["correctness", "docs"]);
+		expect(profiles[0]).toMatchObject({
+			label: "Correctness",
+			description: "Checks logic",
+			model: "slow",
+			when: "complex logic",
+			mode: "always",
+			instances: { min: 1, max: 3 },
+			prompt: "Review behavior and edge cases.",
+		});
+		expect(profiles[1].instances).toEqual({ min: 0, max: 2 });
+	});
+});
+
 describe("formatAdvisorProfilesForPrompt", () => {
 	it("advertises ids and routing hints without exposing full prompts", () => {
-		const profiles = parseAdvisorProfilesMarkdown(
+		const profiles = parseAdvisorProfilesYaml(
 			[
-				"## correctness",
-				"Description: Checks logic",
-				"Model: slow",
-				"When: complex logic",
-				"Mode: always",
-				"Instances: 0-1",
-				"Prompt:",
-				"Private detailed review rubric.",
+				"advisors:",
+				"  correctness:",
+				"    description: Checks logic",
+				"    model: slow",
+				"    when: complex logic",
+				"    mode: always",
+				"    instances:",
+				"      min: 0",
+				"      max: 1",
+				"    prompt: Private detailed review rubric.",
 			].join("\n"),
-			"ADVISORS.md",
+			"ADVISORS.yaml",
 		);
 
 		const rendered = formatAdvisorProfilesForPrompt(profiles);
@@ -101,7 +103,7 @@ describe("formatAdvisorProfilesForPrompt", () => {
 		expect(rendered).toContain("`correctness`");
 		expect(rendered).toContain("when: complex logic");
 		expect(rendered).toContain("model hint: slow");
-		expect(rendered).toContain("`Mode: always` means start persistent advisors");
+		expect(rendered).toContain("`mode: always` means start persistent advisors");
 		expect(rendered).toContain("advisor.pool.maxInstances");
 		expect(rendered).toContain("mode: always");
 		expect(rendered).toContain("persistent: 0");
@@ -114,11 +116,11 @@ describe("formatAdvisorProfilesForPrompt", () => {
 });
 
 describe("normalizeDynamicAdvisorModelSelector", () => {
-	it("keeps default dynamic advisor settings compatible with ADVISORS.md model hints", () => {
+	it("keeps default dynamic advisor settings compatible with YAML model hints", () => {
 		const settings = Settings.isolated();
-		const profile = parseAdvisorProfilesMarkdown(
-			["## correctness", "Model: slow", "Prompt: Review logic."].join("\n"),
-			"ADVISORS.md",
+		const profile = parseAdvisorProfilesYaml(
+			["advisors:", "  correctness:", "    model: slow", "    prompt: Review logic."].join("\n"),
+			"ADVISORS.yaml",
 		)[0];
 
 		const defaultModel = normalizeDynamicAdvisorModelSelector(settings.get("advisor.dynamic.defaultModel"));
@@ -145,17 +147,17 @@ describe("discoverAdvisorProfiles", () => {
 		const agentDir = await tempDir();
 		await fs.mkdir(path.join(root, ".omp"));
 		await fs.writeFile(
-			path.join(agentDir, "ADVISORS.md"),
-			["## correctness", "Prompt: User-level correctness review."].join("\n"),
+			path.join(agentDir, "ADVISORS.yaml"),
+			["advisors:", "  correctness:", "    prompt: User-level correctness review."].join("\n"),
 		);
 		await fs.writeFile(
-			path.join(root, ".omp", "ADVISORS.md"),
+			path.join(root, ".omp", "ADVISORS.yaml"),
 			[
-				"## correctness",
-				"Prompt: Project-specific correctness review.",
-				"",
-				"## security",
-				"Prompt: Review auth and secrets risk.",
+				"advisors:",
+				"  correctness:",
+				"    prompt: Project-specific correctness review.",
+				"  security:",
+				"    prompt: Review auth and secrets risk.",
 			].join("\n"),
 		);
 

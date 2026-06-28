@@ -201,46 +201,47 @@ Especially pay attention to:
 
 Later project files sit closer to the end of the advisor prompt, so narrower directory guidance is more prominent than broad ancestor guidance.
 
-## Dynamic advisors and ADVISORS.md
+## Dynamic advisors and ADVISORS.yaml
 
-Dynamic advisors are one-shot reviewers spawned by the main agent through `spawn_advisor`. They return structured advice as the tool result; they do not steer, edit, approve, or interrupt directly.
+Dynamic advisors are focused reviewers spawned by the main agent through `spawn_advisor`. One-shot advisors return structured advice as the tool result and exit; sticky advisors keep reviewing future turns until they retire or hit a lease limit. They do not steer, edit, approve, or interrupt directly.
 
 The tool is available only when:
 
 - `advisor.enabled: true`
 - `advisor.dynamic.enabled: true`
-- the session has a dynamic advisor runtime (main sessions and task subagents; one-shot dynamic advisors themselves receive no tools and cannot recurse)
+- the session has a dynamic advisor runtime (main sessions and task subagents; dynamic advisors themselves receive no tools and cannot recurse)
 
-Advisor rosters are declarative. They define reusable roles and prompts plus bounded pool metadata:
+Advisor rosters are declarative YAML. They define reusable roles and prompts plus bounded pool metadata:
 
-```markdown
-# Advisors
+```yaml
+advisors:
+  correctness:
+    model: slow
+    when: complex logic, exported APIs, parsers, state machines
+    mode: always
+    instances:
+      min: 1
+      max: 3
+    prompt: Find correctness bugs, missed edge cases, wrong assumptions, and unsafe migrations.
 
-## correctness
-Model: slow
-When: complex logic, exported APIs, parsers, state machines
-Mode: always
-Instances: 0-1
-Prompt:
-Find correctness bugs, missed edge cases, wrong assumptions, and unsafe migrations.
-
-## tests
-Model: smol
-When: tests are added or changed
-Mode: triggered
-Instances: 0-1
-Prompt:
-Review whether tests cover externally observable behavior and avoid brittle implementation assertions.
+  tests:
+    model: smol
+    when: tests are added or changed
+    mode: triggered
+    instances:
+      min: 0
+      max: 1
+    prompt: Review whether tests cover externally observable behavior and avoid brittle implementation assertions.
 ```
 
-`Mode: always` without `Instances:` starts one persistent advisor for that profile. `Instances: min-max` starts `min` persistent advisors and treats `max` as a routing cap hint; it does not automatically fan out to the maximum. The session-wide `advisor.pool.maxInstances` setting (default `5`) caps the total persistent profile advisors a project roster can start. `0-1` remains on-demand only; `3-5` starts three, subject to the cap.
+`mode: always` without `instances` starts one persistent advisor for that profile. `instances.min` starts that many persistent advisors; `instances.max` is a routing cap hint, not automatic fan-out. The session-wide `advisor.pool.maxInstances` setting (default `5`) caps the total persistent profile advisors a project roster can start. `min: 0, max: 1` remains on-demand only; `min: 3, max: 5` starts three, subject to the cap.
 
 Discovery:
 
-1. user level: `<active agent dir>/ADVISORS.md` or `ADVISOR.md`
-2. project levels, ancestor-to-leaf: `<dir>/.omp/ADVISORS.md` or `ADVISOR.md`
+1. user level: `<active agent dir>/ADVISORS.yaml` or `ADVISOR.yaml`
+2. project levels, ancestor-to-leaf: `<dir>/.omp/ADVISORS.yaml` or `ADVISOR.yaml`
 
-Project rosters load only when `advisor.dynamic.useProjectAdvisors` is true. A project file cannot force expensive models: profile `Model:` is only a hint and must match `advisor.dynamic.allowedModels`; otherwise the dynamic advisor falls back to `advisor.dynamic.defaultModel`.
+Project rosters load only when `advisor.dynamic.useProjectAdvisors` is true. A project file cannot force expensive models: profile `model` is only a hint and must match `advisor.dynamic.allowedModels`; otherwise the dynamic advisor falls back to `advisor.dynamic.defaultModel`.
 
 ## Subagents
 

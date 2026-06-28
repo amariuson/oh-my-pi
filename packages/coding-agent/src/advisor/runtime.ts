@@ -48,6 +48,8 @@ export interface AdvisorRuntimeHost {
 	 * one that routes `advise()` results back to the primary.
 	 */
 	beginAdvisorUpdate?(): void;
+	/** Called after an advisor prompt cycle completes successfully. */
+	afterAdvisorUpdate?(turns: number): void;
 	/** Surface a non-recovering advisor failure to the host UI without adding model-visible context. */
 	notifyFailure?(error: unknown): void;
 }
@@ -96,14 +98,14 @@ export class AdvisorRuntime {
 		return this.#backlog;
 	}
 
-	onTurnEnd(messages?: AgentMessage[]): void {
+	onTurnEnd(messages?: AgentMessage[], turns = 1): void {
 		if (this.disposed) return;
 		const all = messages ?? this.host.snapshotMessages();
 		this.#latestMessages = all;
 		const render = this.#renderDelta(all);
 		if (render) {
-			this.#pending.push({ text: render, turns: 1 });
-			this.#backlog++;
+			this.#pending.push({ text: render, turns });
+			this.#backlog += turns;
 			this.#notifyWaiters();
 			void this.#drain();
 		}
@@ -343,6 +345,7 @@ export class AdvisorRuntime {
 					success = true;
 					this.#consecutiveFailures = 0;
 					this.#failureNotified = false;
+					this.host.afterAdvisorUpdate?.(finalTurns);
 				} catch (err) {
 					// reset()/dispose() aborts the in-flight prompt; the rejection is the
 					// reset itself, not a transient advisor failure. Drop the stale batch

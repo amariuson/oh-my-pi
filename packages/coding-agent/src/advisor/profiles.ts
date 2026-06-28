@@ -1,6 +1,7 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import { getAgentDir, isEnoent, logger } from "@oh-my-pi/pi-utils";
+import { YAML } from "bun";
 import { MODEL_ROLE_IDS } from "../config/model-roles";
 import { expandAtImports } from "../discovery/at-imports";
 import { repo } from "../utils/git";
@@ -25,7 +26,7 @@ export interface AdvisorProfile {
 	level: "user" | "project";
 }
 
-const ADVISOR_FILE_NAMES = ["ADVISORS.md", "ADVISOR.md"] as const;
+const ADVISOR_FILE_NAMES = ["ADVISORS.yaml", "ADVISORS.yml", "ADVISOR.yaml", "ADVISOR.yml"] as const;
 
 const MODEL_ROLE_ID_SET = new Set<string>(MODEL_ROLE_IDS);
 
@@ -41,18 +42,6 @@ function slugifyAdvisorId(text: string): string {
 		.toLowerCase()
 		.replace(/[^a-z0-9._-]+/g, "-")
 		.replace(/^-+|-+$/g, "");
-}
-
-function parseField(line: string): { key: string; value: string } | null {
-	const match = line.match(/^([A-Za-z][A-Za-z0-9 _-]*):\s*(.*)$/);
-	if (!match) return null;
-	return {
-		key: match[1]
-			.trim()
-			.toLowerCase()
-			.replace(/[ _-]+/g, ""),
-		value: match[2].trim(),
-	};
 }
 
 function parseAdvisorMode(value: string): AdvisorProfileMode | undefined {
@@ -71,66 +60,75 @@ function parseAdvisorInstances(value: string): AdvisorInstanceRange | undefined 
 	return { min, max: Math.max(min, rawMax) };
 }
 
-function parseAdvisorSection(
-	heading: string,
-	body: string,
+function normalizeAdvisorRecord(
+	id: string,
+	record: Record<string, unknown>,
 	sourcePath: string,
 	level: "user" | "project",
 ): AdvisorProfile | null {
-	const headingField = parseField(heading);
-	const explicitId = headingField?.key === "id" ? headingField.value : undefined;
-	const id = slugifyAdvisorId(explicitId ?? heading);
-	if (!id) return null;
-
-	let label = headingField?.key === "id" ? undefined : heading.trim();
-	let description: string | undefined;
-	let model: string | undefined;
-	let when: string | undefined;
-	let mode: AdvisorProfileMode | undefined;
-	let instances: AdvisorInstanceRange | undefined;
-	let promptStart: number | undefined;
-	const lines = body.split("\n");
-
-	for (let i = 0; i < lines.length; i++) {
-		const field = parseField(lines[i]);
-		if (!field) continue;
-		if (field.key === "label") label = field.value;
-		if (field.key === "description") description = field.value;
-		if (field.key === "model") model = field.value;
-		if (field.key === "when") when = field.value;
-		if (field.key === "mode") mode = parseAdvisorMode(field.value);
-		if (field.key === "instances") instances = parseAdvisorInstances(field.value);
-		if (field.key === "prompt") {
-			promptStart = i;
-			if (field.value) lines[i] = field.value;
-			else lines[i] = "";
-			break;
-		}
-	}
-
-	const promptText = (promptStart === undefined ? body : lines.slice(promptStart).join("\n")).trim();
+	const normalizedId = slugifyAdvisorId(id);
+	if (!normalizedId) return null;
+	const promptValue = record.prompt;
+	const promptText = typeof promptValue === "string" ? promptValue.trim() : "";
 	if (!promptText) return null;
-
-	return { id, label, description, model, when, mode, instances, prompt: promptText, sourcePath, level };
+	const label = typeof record.label === "string" && record.label.trim() ? record.label.trim() : undefined;
+	const description =
+		typeof record.description === "string" && record.description.trim() ? record.description.trim() : undefined;
+	const model = typeof record.model === "string" && record.model.trim() ? record.model.trim() : undefined;
+	const when = typeof record.when === "string" && record.when.trim() ? record.when.trim() : undefined;
+	const mode = typeof record.mode === "string" ? parseAdvisorMode(record.mode) : undefined;
+	const instances = parseAdvisorInstancesValue(record.instances);
+	return {
+		id: normalizedId,
+		label,
+		description,
+		model,
+		when,
+		mode,
+		instances,
+		prompt: promptText,
+		sourcePath,
+		level,
+	};
 }
 
-export function parseAdvisorProfilesMarkdown(
+function parseAdvisorInstancesValue(value: unknown): AdvisorInstanceRange | undefined {
+	if (typeof value === "string" || typeof value === "number") return parseAdvisorInstances(String(value));
+	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+	const record = value as Record<string, unknown>;
+	const min = typeof record.min === "number" ? record.min : Number.parseInt(String(record.min ?? ""), 10);
+	const max = typeof record.max === "number" ? record.max : Number.parseInt(String(record.max ?? min), 10);
+	if (!Number.isFinite(min) || !Number.isFinite(max)) return undefined;
+	const normalizedMin = Math.max(0, Math.trunc(min));
+	return { min: normalizedMin, max: Math.max(normalizedMin, Math.trunc(max)) };
+}
+
+export function parseAdvisorProfilesYaml(
 	content: string,
-	sourcePath = "ADVISORS.md",
+	sourcePath = "ADVISORS.yaml",
 	level: "user" | "project" = "project",
 ): AdvisorProfile[] {
-	const sections: AdvisorProfile[] = [];
-	const headingPattern = /^##\s+(.+)$/gm;
-	const matches = [...content.matchAll(headingPattern)];
-	for (let i = 0; i < matches.length; i++) {
-		const match = matches[i];
-		const heading = match[1];
-		const start = (match.index ?? 0) + match[0].length;
-		const end = matches[i + 1]?.index ?? content.length;
-		const profile = parseAdvisorSection(heading, content.slice(start, end), sourcePath, level);
-		if (profile) sections.push(profile);
+	const parsed = YAML.parse(content);
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+	const root = parsed as Record<string, unknown>;
+	const advisors = root.advisors;
+	if (!advisors || typeof advisors !== "object") return [];
+	if (Array.isArray(advisors)) {
+		return advisors
+			.map(entry => {
+				if (!entry || typeof entry !== "object") return null;
+				const record = entry as Record<string, unknown>;
+				const id = typeof record.id === "string" ? record.id : "";
+				return normalizeAdvisorRecord(id, record, sourcePath, level);
+			})
+			.filter((profile): profile is AdvisorProfile => profile !== null);
 	}
-	return sections;
+	return Object.entries(advisors as Record<string, unknown>)
+		.map(([id, value]) => {
+			if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+			return normalizeAdvisorRecord(id, value as Record<string, unknown>, sourcePath, level);
+		})
+		.filter((profile): profile is AdvisorProfile => profile !== null);
 }
 
 export async function discoverAdvisorProfiles(
@@ -184,7 +182,7 @@ export async function discoverAdvisorProfiles(
 		try {
 			const content = await Bun.file(candidate.path).text();
 			const expanded = await expandAtImports(content, candidate.path);
-			for (const profile of parseAdvisorProfilesMarkdown(expanded, candidate.path, candidate.level)) {
+			for (const profile of parseAdvisorProfilesYaml(expanded, candidate.path, candidate.level)) {
 				profiles.set(profile.id, profile);
 			}
 		} catch (err) {
@@ -202,9 +200,9 @@ export function formatAdvisorProfilesForPrompt(profiles: AdvisorProfile[]): stri
 		"## Available dynamic advisors",
 		"",
 		"At task start and before risky changes, consider whether a focused advisor would catch mistakes you might miss. Spawn one-shot advisors for concrete risks; skip them when no profile is relevant. Persistent profiles run only when configured.",
-		"`Mode: always` means start persistent advisors. `Instances: min-max` starts `min` persistent advisors; `max` is a routing cap hint, not automatic fan-out. Session cap: `advisor.pool.maxInstances`.",
+		"`mode: always` means start persistent advisors. `instances.min` starts that many persistent advisors; `instances.max` is a routing cap hint, not automatic fan-out. Session cap: `advisor.pool.maxInstances`.",
 		"",
-		"Named advisors from ADVISORS.md:",
+		"Named advisors from ADVISORS.yaml:",
 	];
 	for (const profile of profiles) {
 		const label = profile.label && profile.label !== profile.id ? ` (${profile.label})` : "";

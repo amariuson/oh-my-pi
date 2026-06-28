@@ -8,13 +8,22 @@ import { ToolError } from "./tool-errors";
 import { toolResult } from "./tool-result";
 
 const spawnAdvisorSchema = type({
-	"advisor?": type("string").describe("Named advisor profile from ADVISORS.md / ADVISOR.md."),
+	"advisor?": type("string").describe("Named advisor profile from ADVISORS.yaml / ADVISORS.yml."),
 	"role?": type("string").describe("Ad-hoc advisor role, for example 'security reviewer'."),
 	focus: type("string").describe("Concrete question, risk, or artifact for the advisor to review."),
 	"model?": type("string").describe("Optional model role/spec allowed by advisor.dynamic.allowedModels."),
 	"context?": type("'transcript' | 'last_turn'").describe(
 		"Context window to show the advisor. Defaults to last_turn; use transcript only for cross-turn questions.",
 	),
+	"lifecycle?": type("'one_shot' | 'sticky'").describe(
+		"one_shot returns advice immediately; sticky keeps monitoring future turns until done or lease expiry.",
+	),
+	"risk?": type("'low' | 'medium' | 'high'").describe(
+		"Risk/importance used to choose sticky instance count when instances is omitted: low=1, medium=2, high=3.",
+	),
+	"instances?": type("number").describe("Sticky advisors to start, clamped to 1-3 and existing limits."),
+	"max_turns?": type("number").describe("Sticky lease in primary turns. Defaults to 8, clamped to 1-20."),
+	"timeout_seconds?": type("number").describe("Optional sticky wall-clock lease in seconds, clamped to 60-3600."),
 });
 
 export type SpawnAdvisorParams = typeof spawnAdvisorSchema.infer;
@@ -30,6 +39,12 @@ export interface DynamicAdvisorResult {
 	role: string;
 	model: string;
 	notes: DynamicAdvisorNote[];
+	advisorIds?: string[];
+	lifecycle?: "one_shot" | "sticky";
+	lease?: {
+		maxTurns: number;
+		timeoutSeconds?: number;
+	};
 }
 
 export interface SpawnAdvisorDetails extends DynamicAdvisorResult {
@@ -37,7 +52,13 @@ export interface SpawnAdvisorDetails extends DynamicAdvisorResult {
 }
 
 function formatAdvisorResult(result: DynamicAdvisorResult): string {
-	const header = `Advisor ${result.advisorId} (${result.role}, ${result.model})`;
+	const lifecycle = result.lifecycle ?? "one_shot";
+	const ids = result.advisorIds?.length ? result.advisorIds.join(", ") : result.advisorId;
+	const lease = result.lease
+		? `\nLease: ${result.lease.maxTurns} turns${result.lease.timeoutSeconds ? `, ${result.lease.timeoutSeconds}s` : ""}`
+		: "";
+	const header = `Advisor ${ids} (${result.role}, ${result.model}, ${lifecycle})${lease}`;
+	if (lifecycle === "sticky") return `${header}\nMonitoring started. Advice will arrive as advisor notes.`;
 	if (result.notes.length === 0) return `${header}\nNo concrete advice.`;
 	const notes = result.notes
 		.map((note, index) => {

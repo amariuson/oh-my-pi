@@ -423,7 +423,7 @@ export const SETTINGS_SCHEMA = {
 			tab: "model",
 			group: "Advisor",
 			label: "Dynamic Advisor Allowed Models",
-			description: "Model role/spec allowlist for dynamic advisors. Project ADVISORS.md files cannot bypass it.",
+			description: "Model role/spec allowlist for dynamic advisors. Project ADVISORS.yaml files cannot bypass it.",
 			condition: "advisorEnabled",
 		},
 	},
@@ -455,8 +455,8 @@ export const SETTINGS_SCHEMA = {
 		ui: {
 			tab: "model",
 			group: "Advisor",
-			label: "Use Project ADVISORS.md",
-			description: "Load declarative advisor profiles from project .omp/ADVISORS.md files.",
+			label: "Use Project ADVISORS.yaml",
+			description: "Load declarative advisor profiles from project .omp/ADVISORS.yaml files.",
 			condition: "advisorEnabled",
 		},
 	},
@@ -467,7 +467,7 @@ export const SETTINGS_SCHEMA = {
 			tab: "model",
 			group: "Advisor",
 			label: "Advisor Pool Max Instances",
-			description: "Maximum persistent ADVISORS.md profile advisors this session may start.",
+			description: "Maximum persistent ADVISORS.yaml profile advisors this session may start.",
 			options: [
 				{ label: "Off", value: "0" },
 				{ label: "1", value: "1" },

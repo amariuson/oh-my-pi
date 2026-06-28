@@ -146,6 +146,7 @@ import {
 	isAdvisorInterruptImmuneTurnActive,
 	isInterruptingSeverity,
 	normalizeDynamicAdvisorModelSelector,
+	RetireAdvisorTool,
 	resolveAdvisorDeliveryChannel,
 } from "../advisor";
 import { type AsyncJob, type AsyncJobDeliveryState, AsyncJobManager } from "../async";
@@ -233,6 +234,7 @@ import { createPlanReadMatcher } from "../plan-mode/plan-protection";
 import type { PlanModeState } from "../plan-mode/state";
 import dynamicAdvisorSystemPrompt from "../prompts/advisor/dynamic-system.md" with { type: "text" };
 import advisorProfilePrompt from "../prompts/advisor/profile-context.md" with { type: "text" };
+import stickyDynamicAdvisorSystemPrompt from "../prompts/advisor/sticky-dynamic-system.md" with { type: "text" };
 import advisorSystemPrompt from "../prompts/advisor/system.md" with { type: "text" };
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
 import eagerTaskPrompt from "../prompts/system/eager-task.md" with { type: "text" };
@@ -615,7 +617,7 @@ export interface AgentSessionConfig {
 	advisorReadOnlyTools?: AgentTool[];
 	/** Preloaded watchdog prompt content for the advisor. */
 	advisorWatchdogPrompt?: string;
-	/** Declarative one-shot advisor profiles loaded from ADVISORS.md files. */
+	/** Declarative advisor profiles loaded from ADVISORS.yaml files. */
 	advisorProfiles?: AdvisorProfile[];
 	/**
 	 * Preloaded project context files (AGENTS.md, etc.) rendered as a system-prompt
@@ -1258,6 +1260,7 @@ export class AgentSession {
 	#advisorProfiles: AdvisorProfile[] = [];
 	#dynamicAdvisorSpawnsThisTurn = 0;
 	#dynamicAdvisorSpawnsThisSession = 0;
+	#stickyAdvisorSeq = 0;
 	#advisorYieldQueueUnsubscribe?: () => void;
 	/** Persists the advisor agent's turns to `<session>/__advisor.jsonl` for stats
 	 *  attribution and Agent Hub observability. Undefined when no advisor is active. */
@@ -2283,7 +2286,6 @@ export class AgentSession {
 		if (contextWindow <= 0) return false;
 		const targetModel = await this.#resolveContextPromotionTarget(currentModel, contextWindow);
 		if (!targetModel) return false;
-
 
 		try {
 			advisor.setModel(targetModel);
@@ -14105,14 +14107,6 @@ export class AgentSession {
 		if (!this.settings.get("advisor.enabled") || !this.settings.get("advisor.dynamic.enabled")) {
 			throw new Error("Dynamic advisors are disabled.");
 		}
-		const maxPerTurn = this.settings.get("advisor.dynamic.maxPerTurn");
-		if (maxPerTurn >= 0 && this.#dynamicAdvisorSpawnsThisTurn >= maxPerTurn) {
-			throw new Error(`Dynamic advisor limit reached for this turn (${maxPerTurn}).`);
-		}
-		const maxPerSession = this.settings.get("advisor.dynamic.maxPerSession");
-		if (maxPerSession >= 0 && this.#dynamicAdvisorSpawnsThisSession >= maxPerSession) {
-			throw new Error(`Dynamic advisor limit reached for this session (${maxPerSession}).`);
-		}
 
 		const advisorId = request.advisor?.trim();
 		const profile = advisorId ? this.#advisorProfiles.find(p => p.id === advisorId) : undefined;
@@ -14132,6 +14126,11 @@ export class AgentSession {
 		};
 		throwIfAborted();
 
+		if (request.lifecycle === "sticky") {
+			return this.#startStickyDynamicAdvisors(request, profile, role, modelSelection, signal);
+		}
+
+		this.#reserveDynamicAdvisorSlots(1, false);
 		this.#dynamicAdvisorSpawnsThisTurn++;
 		this.#dynamicAdvisorSpawnsThisSession++;
 		const context = this.#formatDynamicAdvisorContext(request.context ?? "last_turn");
@@ -14145,9 +14144,8 @@ export class AgentSession {
 			.filter((part): part is string => !!part)
 			.join("\n\n");
 
-		const advisorSessionId = this.sessionId
-			? `${this.sessionId}-dynamic-advisor-${profile?.id ?? role.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`
-			: undefined;
+		const baseId = this.#dynamicAdvisorBaseId(profile?.id, role);
+		const advisorSessionId = this.sessionId ? `${this.sessionId}-dynamic-advisor-${baseId}` : undefined;
 		const advisorTelemetry = this.agent.telemetry
 			? {
 					...this.agent.telemetry,
@@ -14191,16 +14189,206 @@ export class AgentSession {
 		const rawText = assistant ? this.#assistantText(assistant) : "";
 		const output = this.#obfuscator?.hasSecrets() ? this.#obfuscator.deobfuscate(rawText) : rawText;
 		return {
-			advisorId:
-				profile?.id ??
-				role
-					.toLowerCase()
-					.replace(/[^a-z0-9]+/g, "-")
-					.replace(/^-+|-+$/g, ""),
+			advisorId: baseId,
 			role,
 			model: formatModelString(modelSelection.model),
 			notes: this.#parseDynamicAdvisorNotes(output),
+			lifecycle: "one_shot",
 		};
+	}
+
+	#startStickyDynamicAdvisors(
+		request: SpawnAdvisorParams,
+		profile: AdvisorProfile | undefined,
+		role: string,
+		modelSelection: { model: Model; thinkingLevel?: ThinkingLevel },
+		signal?: AbortSignal,
+	): DynamicAdvisorResult {
+		if (signal?.aborted) {
+			throw signal.reason instanceof Error ? signal.reason : new Error("Dynamic advisor aborted.");
+		}
+		const requestedCount = this.#resolveStickyAdvisorInstanceCount(request, profile);
+		const count = this.#reserveDynamicAdvisorSlots(requestedCount);
+		const maxTurns = this.#stickyAdvisorMaxTurns(request.max_turns);
+		const timeoutMs = this.#stickyAdvisorTimeoutMs(request.timeout_seconds);
+		const advisorIds: string[] = [];
+		const baseId = this.#dynamicAdvisorBaseId(profile?.id, role);
+
+		for (let i = 0; i < count; i++) {
+			const key = `dynamic-${baseId}-${++this.#stickyAdvisorSeq}`;
+			const advisorSessionId = this.#advisorSessionId(`advisor-${key}`);
+			const guard = new AdvisorEmissionGuard();
+			let member!: AdvisorPoolMember;
+			const adviseTool = new AdviseTool((note, severity) => this.#enqueueAdvisorAdvice(note, severity, guard));
+			const retireTool = new RetireAdvisorTool(reason => {
+				if (member.sticky) member.sticky.retireReason = reason || "advisor marked done";
+			});
+			const focusPrompt = [
+				`# Role\n${role}`,
+				profile?.when ? `# Trigger hints\n${profile.when}` : undefined,
+				`# Focus\n${request.focus.trim()}`,
+				profile?.prompt ? `# Advisor instructions\n${profile.prompt}` : undefined,
+				`# Lease\nRetire yourself with retire_advisor when done. Host limit: ${maxTurns} primary turns.`,
+			]
+				.filter((part): part is string => !!part)
+				.join("\n\n");
+			const systemPrompt = [advisorSystemPrompt, stickyDynamicAdvisorSystemPrompt];
+			if (this.#advisorContextPrompt) systemPrompt.push(this.#advisorContextPrompt);
+			if (this.#advisorWatchdogPrompt) systemPrompt.push(this.#advisorWatchdogPrompt);
+			systemPrompt.push(focusPrompt);
+			const appendOnlyContext = new AppendOnlyContextManager();
+			const agent = new Agent({
+				initialState: {
+					systemPrompt,
+					model: modelSelection.model,
+					thinkingLevel: toReasoningEffort(modelSelection.thinkingLevel ?? ThinkingLevel.Medium),
+					tools: [adviseTool, retireTool, ...(this.#advisorReadOnlyTools ?? [])],
+				},
+				appendOnlyContext,
+				sessionId: advisorSessionId,
+				promptCacheKey: advisorSessionId,
+				providerSessionState: this.#providerSessionState,
+				getApiKey: requestModel => this.#modelRegistry.resolver(requestModel, advisorSessionId),
+				streamFn: this.#advisorStreamFn,
+				onPayload: this.#onPayload,
+				onResponse: this.#onResponse,
+				onSseEvent: this.#onSseEvent,
+				transformProviderContext: this.#transformProviderContext,
+				intentTracing: false,
+				telemetry: this.#advisorTelemetry(`advisor-${key}`, `Advisor ${role}`, modelSelection.model),
+			});
+			agent.setDisableReasoning(shouldDisableReasoning(modelSelection.thinkingLevel ?? ThinkingLevel.Medium));
+			this.#syncAdvisorAgentSessionId(agent, `advisor-${key}`, `Advisor ${role}`);
+			const runtime = new AdvisorRuntime(
+				{
+					prompt: input => agent.prompt(input),
+					abort: reason => agent.abort(reason),
+					reset: () => {
+						agent.reset();
+						appendOnlyContext.log.clear();
+					},
+					state: agent.state,
+				},
+				{
+					snapshotMessages: () => this.agent.state.messages,
+					enqueueAdvice: (note, severity) => this.#enqueueAdvisorAdvice(note, severity, guard),
+					maintainContext: incomingTokens =>
+						this.#maintainAdvisorContext(incomingTokens, agent, this.#advisorSessionId(`advisor-${key}`)),
+					obfuscator: this.#obfuscator,
+					beginAdvisorUpdate: () => guard.beginUpdate(),
+					afterAdvisorUpdate: turns => this.#afterStickyAdvisorUpdate(key, turns),
+				},
+			);
+			const recorder = new AdvisorTranscriptRecorder(
+				() => this.sessionManager.getSessionFile(),
+				() => this.sessionManager.getCwd(),
+				this.#advisorPool.recorderClosed,
+				`${ADVISOR_TRANSCRIPT_STEM}-${key}.jsonl`,
+			);
+			member = {
+				key,
+				runtime,
+				agent,
+				role,
+				adviseTool,
+				emissionGuard: guard,
+				recorder,
+				sticky: { maxTurns, turns: 0, startedAt: Date.now(), timeoutMs },
+			};
+			this.#advisorPool.add(member);
+			if (timeoutMs !== undefined && member.sticky) {
+				const timeout = setTimeout(
+					() => this.#retireStickyAdvisor(key, "sticky advisor lease timed out"),
+					timeoutMs,
+				);
+				timeout.unref?.();
+				member.sticky.timeout = timeout;
+			}
+			runtime.seedTo(this.#dynamicAdvisorSeedCount(request.context ?? "last_turn"));
+			runtime.onTurnEnd(this.agent.state.messages, 0);
+			advisorIds.push(key);
+		}
+		this.#dynamicAdvisorSpawnsThisTurn += count;
+		this.#dynamicAdvisorSpawnsThisSession += count;
+		return {
+			advisorId: advisorIds[0] ?? baseId,
+			advisorIds,
+			role,
+			model: formatModelString(modelSelection.model),
+			notes: [],
+			lifecycle: "sticky",
+			lease: {
+				maxTurns,
+				timeoutSeconds: timeoutMs === undefined ? undefined : Math.round(timeoutMs / 1000),
+			},
+		};
+	}
+
+	#afterStickyAdvisorUpdate(key: string, turns: number): void {
+		const member = this.#advisorPool.get(key);
+		if (!member?.sticky) return;
+		member.sticky.turns += turns;
+		if (member.sticky.retireReason) {
+			this.#retireStickyAdvisor(key, member.sticky.retireReason);
+			return;
+		}
+		if (member.sticky.turns >= member.sticky.maxTurns) {
+			this.#retireStickyAdvisor(key, "sticky advisor max turns reached");
+		}
+	}
+
+	#retireStickyAdvisor(key: string, reason: string): void {
+		const member = this.#advisorPool.get(key);
+		if (!member?.sticky) return;
+		logger.debug("Retiring sticky advisor", { key, reason });
+		this.#advisorPool.remove(key);
+	}
+
+	#resolveStickyAdvisorInstanceCount(request: SpawnAdvisorParams, profile: AdvisorProfile | undefined): number {
+		const explicit = Number.isFinite(request.instances) ? Math.trunc(request.instances ?? 1) : undefined;
+		const riskCount = request.risk === "high" ? 3 : request.risk === "medium" ? 2 : 1;
+		const profileMax = profile?.instances?.max ?? 3;
+		return Math.max(1, Math.min(3, profileMax, explicit ?? riskCount));
+	}
+
+	#reserveDynamicAdvisorSlots(requested: number, persistent = true): number {
+		const maxPerTurn = this.settings.get("advisor.dynamic.maxPerTurn");
+		const maxPerSession = this.settings.get("advisor.dynamic.maxPerSession");
+		const remainingTurn = maxPerTurn < 0 ? requested : Math.max(0, maxPerTurn - this.#dynamicAdvisorSpawnsThisTurn);
+		const remainingSession =
+			maxPerSession < 0 ? requested : Math.max(0, maxPerSession - this.#dynamicAdvisorSpawnsThisSession);
+		const remainingPool = persistent ? Math.max(0, this.#advisorPoolCap() - this.#advisorPool.size) : requested;
+		const count = Math.min(requested, remainingTurn, remainingSession, remainingPool);
+		if (count <= 0) {
+			throw new Error("Dynamic advisor limit reached.");
+		}
+		return count;
+	}
+
+	#stickyAdvisorMaxTurns(value: number | undefined): number {
+		if (!Number.isFinite(value)) return 8;
+		return Math.max(1, Math.min(20, Math.trunc(value ?? 8)));
+	}
+
+	#stickyAdvisorTimeoutMs(value: number | undefined): number | undefined {
+		if (!Number.isFinite(value) || value === undefined || value <= 0) return undefined;
+		return Math.max(60, Math.min(3600, Math.trunc(value))) * 1000;
+	}
+
+	#dynamicAdvisorSeedCount(mode: "transcript" | "last_turn"): number {
+		if (mode === "transcript") return 0;
+		return Math.max(
+			0,
+			this.agent.state.messages.findLastIndex(message => message.role === "user"),
+		);
+	}
+
+	#dynamicAdvisorBaseId(profileId: string | undefined, role: string): string {
+		const roleId = role
+			.toLowerCase()
+			.replace(/[^a-z0-9]+/g, "-")
+			.replace(/^-+|-+$/g, "");
+		return profileId || roleId || "dynamic-advisor";
 	}
 
 	#resolveDynamicAdvisorModel(

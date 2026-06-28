@@ -14,6 +14,14 @@ export interface AdvisorPoolMember {
 	emissionGuard: AdvisorEmissionGuard;
 	recorder: AdvisorTranscriptRecorder;
 	unsubscribe?: () => void;
+	sticky?: {
+		maxTurns: number;
+		turns: number;
+		startedAt: number;
+		timeoutMs?: number;
+		timeout?: Timer;
+		retireReason?: string;
+	};
 }
 
 interface AdvisorPoolOptions {
@@ -76,6 +84,13 @@ export class AdvisorPool {
 		return [...this.#members.values()].map(member => member.runtime).filter(runtime => !runtime.disposed);
 	}
 
+	add(member: AdvisorPoolMember): void {
+		this.remove(member.key);
+		this.#members.set(member.key, member);
+		this.#attachRecorderFeed(member);
+		this.#options.onStarted();
+	}
+
 	agents(): Agent[] {
 		return [...this.#members.values()].map(member => member.agent);
 	}
@@ -86,6 +101,21 @@ export class AdvisorPool {
 
 	forEachMember(callback: (member: AdvisorPoolMember) => void): void {
 		for (const member of this.#members.values()) callback(member);
+	}
+
+	get(key: string): AdvisorPoolMember | undefined {
+		return this.#members.get(key);
+	}
+
+	remove(key: string): void {
+		const member = this.#members.get(key);
+		if (!member) return;
+		if (member.sticky?.timeout) clearTimeout(member.sticky.timeout);
+		member.unsubscribe?.();
+		member.runtime.dispose();
+		this.#members.delete(key);
+		const close = member.recorder.close();
+		this.#recorderClosed = Promise.allSettled([this.#recorderClosed, close]).then(() => {});
 	}
 
 	resetRuntimes(): void {
@@ -118,6 +148,7 @@ export class AdvisorPool {
 		this.detachRecorderFeeds();
 		const closers: Promise<void>[] = [];
 		for (const member of this.#members.values()) {
+			if (member.sticky?.timeout) clearTimeout(member.sticky.timeout);
 			member.runtime.dispose();
 			closers.push(member.recorder.close());
 		}
